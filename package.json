@@ -1,5 +1,5 @@
 {
-  "name": "ctrip-apollo",
+  "name": "ctrip-apollo-ex",
   "version": "4.4.2",
   "description": "The most delightful and handy Node.js client for ctrip apollo configuration service",
   "main": "src/index.js",
@@ -19,7 +19,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/kaelzhang/ctrip-apollo.git"
+    "url": "https://github.com/Saltpond/ctrip-apollo"
   },
   "keywords": [
     "ctrip-apollo",
@@ -32,6 +32,9 @@
     "node": ">=7.10.1"
   },
   "author": "kaelzhang",
+  "contributors": [
+    "saltpond"
+  ],
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/kaelzhang/ctrip-apollo/issues"
