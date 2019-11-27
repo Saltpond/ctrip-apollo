@@ -3,6 +3,7 @@ const EventEmitter = require('events')
 const log = require('util').debuglog('ctrip-apollo')
 
 const req = require('request')
+const {request: reqSync} = require('urllib-sync')
 const fs = require('fs-extra')
 const {diff} = require('diff-sorted-array')
 
@@ -58,6 +59,37 @@ const request = (url, timeout) => new Promise((resolve, reject) => {
     }
   })
 })
+
+const requestSync = (url, timeout) => {
+  const response = reqSync(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8',
+    },
+    rejectUnauthorized: true,
+    contentType: 'json',
+    dataType: 'json',
+  })
+
+  const {
+    data,
+    status
+  } = response
+
+  if (status === 304) {
+    return {
+      noChange: true
+    }
+  }
+
+  if (status !== 200) {
+    throw error('FETCH_STATUS_ERROR', status)
+  }
+
+  return {
+    config: data
+  }
+}
 
 const CONVERTER = {
   CACHE: json => json,
@@ -140,6 +172,31 @@ class ApolloNamespace extends EventEmitter {
     }
   }
 
+  _loadSync (url, converter) {
+    const {
+      noChange,
+      config
+    } = requestSync(url, this._options.fetchTimeout)
+
+    if (noChange) {
+      return {
+        noChange
+      }
+    }
+
+    const {
+      releaseKey
+    } = config
+
+    if (releaseKey) {
+      this._releaseKey = releaseKey
+    }
+
+    return {
+      config: converter(config)
+    }
+  }
+
   _loadWithNoCache () {
     const url = queryConfig({
       ...this._options,
@@ -148,6 +205,16 @@ class ApolloNamespace extends EventEmitter {
 
     log('client: load with no cache: %s', url)
     return this._load(url, CONVERTER.NO_CACHE)
+  }
+
+  _loadWithNoCacheSync () {
+    const url = queryConfig({
+      ...this._options,
+      releaseKey: this._releaseKey
+    })
+
+    log('client: load with no cache: %s', url)
+    return this._loadSync(url, CONVERTER.NO_CACHE)
   }
 
   _loadWithCache () {
@@ -177,9 +244,9 @@ class ApolloNamespace extends EventEmitter {
   }
 
   _diffAndSave ({
-    noChange,
-    config
-  }) {
+                  noChange,
+                  config
+                }) {
     if (noChange) {
       return
     }
@@ -273,6 +340,25 @@ class ApolloNamespace extends EventEmitter {
     return this
   }
 
+  readySync() {
+    const config = this._options.skipInitFetchIfCacheFound
+      ? this._readOrFetchSync()
+      : this._fetchOrFallbackSync()
+
+    this._config = config
+
+    this._checkReady = NOOP
+    this._ready = true
+
+    if (this._options.enableFetch) {
+      this.enableFetch(true)
+    }
+
+    this.emit('ready')
+
+    return this
+  }
+
   async _readCache () {
     const cacheFile = this._cacheFile
 
@@ -293,10 +379,40 @@ class ApolloNamespace extends EventEmitter {
     }
   }
 
+  _readCacheSync () {
+    const cacheFile = this._cacheFile
+
+    if (!cacheFile) {
+      return null
+    }
+
+    try {
+      fs.accessSync(cacheFile, fs.constants.R_OK)
+    } catch (err) {
+      throw error('NO_LOCAL_CACHE_FOUND', err, cacheFile)
+    }
+
+    try {
+      return fs.readJsonSync(cacheFile)
+    } catch (err) {
+      throw error('READ_LOCAL_CACHE_FAILS', err, cacheFile)
+    }
+  }
+
   async _firstFetch () {
     const {
       config
     } = await this._loadWithNoCache()
+
+    this._save(config)
+
+    return config
+  }
+
+  _firstFetchSync () {
+    const {
+      config
+    } = this._loadWithNoCacheSync()
 
     this._save(config)
 
@@ -328,6 +444,31 @@ class ApolloNamespace extends EventEmitter {
     }
   }
 
+  _readOrFetchSync () {
+    let readError
+    let config
+
+    try {
+      config = this._readCacheSync()
+    } catch (err) {
+      readError = err
+    }
+
+    if (config) {
+      log('cache found, skip fetching')
+      return config
+    }
+
+    try {
+      return this._firstFetchSync()
+    } catch (err) {
+      throw composeError(
+        readError || error('NO_CACHE_SPECIFIED'),
+        err
+      )
+    }
+  }
+
   async _fetchOrFallback () {
     let fetchError
 
@@ -344,6 +485,36 @@ class ApolloNamespace extends EventEmitter {
 
     try {
       config = await this._readCache()
+    } catch (err) {
+      throw composeError(fetchError, err)
+    }
+
+    if (config) {
+      return config
+    }
+
+    throw composeError(
+      fetchError,
+      error('NO_CACHE_SPECIFIED')
+    )
+  }
+
+  _fetchOrFallbackSync () {
+    let fetchError
+
+    try {
+      return this._firstFetchSync()
+    } catch (err) {
+      this.emit('fetch-error', err)
+      fetchError = err
+    }
+
+    // If fails to fetch configurations from apollo,
+    // then fallback to local cache file
+    let config
+
+    try {
+      config = this._readCacheSync()
     } catch (err) {
       throw composeError(fetchError, err)
     }
